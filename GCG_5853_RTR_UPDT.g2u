@@ -1,0 +1,131 @@
+Program.Sub.Preflight.Start
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.Try
+'TJS May 2020
+'Customer: Hennig, Inc.
+'Objective: The proposal is to update routers from completed production work orders as an automatic process, via the task scheduler.
+'Scope: Custom GAB script that runs on the task scheduler to update standard routers from completed work orders.
+'Benefits: This will allow the customer to update their standard routers via completed work orders automatically on a weekly basis.
+
+F.Intrinsic.Control.CallSub(Data)
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.Data.Start
+F.Intrinsic.Control.Try
+V.Local.sSQL.Declare
+V.Local.sBgDt.Declare
+V.Local.sEnDt.Declare
+V.Local.sJobs.Declare
+V.Local.iCNT.Declare
+V.Local.iCNT2.Declare
+V.Local.sPath.Declare
+
+V.Local.sEnDt.Set(V.Ambient.Date.PervasiveDate)
+
+'V.Local.sEnDt.Set("2020-05-04")
+
+F.Intrinsic.Date.DateAdd("d",-7,V.Local.sEnDt,V.Local.sBgDt)
+
+V.Local.sBgDt.Set(V.Local.sBgDt.PervasiveDate)
+
+F.Intrinsic.Control.If(V.DataTable.dtJOBS.Exists)
+	F.Data.DataTable.Close("dtJobs")
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.If(V.DataTable.dtOPS.Exists)
+	F.Data.DataTable.Close("dtOPS")
+F.Intrinsic.Control.EndIf
+
+F.ODBC.Connection!conts.OpenCompanyConnection
+
+F.Intrinsic.String.Build("Select RTRIM(JOB) as JOB,RTRIM(SUFFIX) as SUFFIX,RTRIM(ROUTER) as ROUTER from V_JOB_HEADER where DATE_CLOSED between '{0}' and '{1}' and RTRIM(SUFFIX) not in ('RWK','WAR')",V.Local.sBgDt,V.Local.sEnDt,V.Local.sSQL)
+
+F.Data.DataTable.CreateFromSQL("dtJobs","conts",V.Local.sSQL,True)
+
+F.Data.DataTable.Create("dtOPS",True)
+F.Data.DataTable.AddColumn("dtOPS","JOB","String")
+F.Data.DataTable.AddColumn("dtOPS","SUFFIX","String")
+F.Data.DataTable.AddColumn("dtOPS","SEQ","String")
+F.Data.DataTable.AddColumn("dtOPS","ROUTER","String")
+F.Data.DataTable.AddColumn("dtOPS","ROUTER_SEQ","String")
+F.Data.DataTable.AddColumn("dtOPS","HRS","String")
+
+F.Data.DataTable.Create("dtLog",True)
+F.Data.DataTable.AddColumn("dtLog","DATE","String")
+F.Data.DataTable.AddColumn("dtLog","ROUTER","String")
+F.Data.DataTable.AddColumn("dtLog","SEQUENCE","String")
+F.Data.DataTable.AddColumn("dtLog","ORIG_RUNTIME","String")
+F.Data.DataTable.AddColumn("dtLog","NEW_RUNTIME","String")
+F.Data.DataTable.AddColumn("dtLog","UPDATED","STRING")
+
+F.Data.DataTable.AddRow("dtLog","DATE",V.Ambient.Date.PervasiveDate)
+
+F.Intrinsic.Control.For(V.Local.iCNT,0,V.DataTable.dtJobs.RowCount--,1)
+	F.Intrinsic.String.Build("Select RTRIM(ROUTER) as ROUTER,RTRIM(ROUTER_SEQ) as ROUTER_SEQ,Cast(Avg(HOURS_ACTUAL) as double) as AVG_HRS,RUN_TIME from (Select top 3 RTRIM(A.ROUTER) as ROUTER,RTRIM(ROUTER_SEQ) as ROUTER_SEQ,Cast(c.RUN_TIME as double) as RUN_TIME, HOURS_ACTUAL from V_JOB_OPERATIONS A left join V_JOB_HEADER B on B.JOB = A.JOB and B.SUFFIX = A.SUFFIX left outer join V_ROUTER_LINE C on RTRIM(a.router) = RTRIM(C.router) and RTRIM(A.ROUTER_SEQ) = RTRIM(C.LINE_ROUTER) where RTRIM(a.JOB) = '{0}' and RTRIM(a.SUFFIX) = '{1}' and A.LMO = 'L' and B.DATE_CLOSED <> '1900-01-01' and HOURS_ACTUAL <> '0' and RTRIM(a.ROUTER) <> '' order by A.HOURS_ACTUAL asc) as HRS group by ROUTER,ROUTER_SEQ,RUN_TIME;",V.DataTable.dtJobs(V.Local.iCNT).JOB!FieldValTrim,V.DataTable.dtJobs(V.Local.iCNT).SUFFIX!FieldValTrim,V.Local.sSQL)
+	F.ODBC.Connection!conts.ExecuteAndReturn(V.Local.sSQL,V.Local.sSQL)
+
+	F.Intrinsic.Control.CallSub(ProcessData,"OPSDATA",V.Local.sSQL)
+F.Intrinsic.Control.Next(V.Local.iCNT)
+
+V.Local.sPath.Set(V.Caller.FilesDir)
+
+F.Intrinsic.String.Build("{0}\RouterUpdate.csv",V.Local.sPath.Trim,V.Local.sPath)
+
+F.Data.DataTable.SaveToCSV("dtLog",V.Local.sPath,True)
+
+F.ODBC.Connection!conts.Close
+
+F.Data.DataTable.Close("dtJobs")
+F.Data.DataTable.Close("dtLog")
+
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.Data.End
+
+Program.Sub.ProcessData.Start
+F.Intrinsic.Control.Try
+V.Local.iCNT.Declare
+V.Local.iCNT2.Declare
+V.Local.sRunTime.Declare
+V.Local.sSQL.Declare
+V.Local.sRtrTime.Declare
+V.Local.sUpdt.Declare
+
+V.Local.sSQL.Set(V.Args.OPSDATA)
+
+F.Intrinsic.Control.If(V.Local.sSQL.Trim,<>,"")
+	F.Intrinsic.String.Split(V.Local.sSQL,"#$#",V.Local.sSQL)
+	F.Intrinsic.Control.For(V.Local.iCNT2,V.Local.sSQL.LBound,V.Local.sSQL.UBound,1)
+		F.Intrinsic.String.Split(V.Local.sSQL(V.Local.iCNT2),"*!*",V.Local.sRunTime)
+			F.Intrinsic.Control.If(V.Local.sRunTime(2),<,V.Local.sRunTime(3))
+				F.Intrinsic.String.Build("Update ROUTER_LINE set RUN_TIME = '{0}' where RTRIM(ROUTER) = '{1}' and RTRIM(LINE_ROUTER) = '{2}'",V.Local.sRunTime(2),V.Local.sRunTime(0),V.Local.sRunTime(1),V.Local.sUpdt)
+				F.ODBC.Connection!conts.Execute(V.Local.sUpdt)
+				F.Data.DataTable.AddRow("dtLog","ROUTER",V.Local.sRunTime(0),"SEQUENCE",V.Local.sRunTime(1),"ORIG_RUNTIME",V.Local.sRunTime(3),"NEW_RUNTIME",V.Local.sRunTime(2),"UPDATED","YES")
+			F.Intrinsic.Control.EndIf
+			F.Data.DataTable.AddRow("dtLog","ROUTER",V.Local.sRunTime(0),"SEQUENCE",V.Local.sRunTime(1),"ORIG_RUNTIME",V.Local.sRunTime(3),"NEW_RUNTIME",V.Local.sRunTime(2),"UPDATED","NO")
+	F.Intrinsic.Control.Next(V.Local.iCNT2)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.ProcessData.End
+
+Program.Sub.Error.Start
+V.Local.sError.Declare
+V.Local.iRet.Declare
+V.Local.sSep.Declare
+
+F.Intrinsic.String.Build("-------------------------------------------------------------------------------------",,V.Local.sSep)
+F.Intrinsic.String.Build("({5}-{6}){0}{7}{0}Project: {4}{0}{7}{0}Sub: {1}{0}Error: {2}, {3}", V.Ambient.NewLine, V.Args.SubRoutine, V.Args.eNumber, V.Args.eDescription,V.Caller.ScriptFile,V.Ambient.Date, V.Ambient.Time,V.Local.sSep,V.Local.sError)
+F.Intrinsic.UI.Msgbox(V.Local.sError,"Error",V.Local.iRet)
+Program.Sub.Error.End
